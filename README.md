@@ -1,8 +1,8 @@
 # YouTube LinkedIn Publisher
 
-**An n8n automation pipeline that monitors curated YouTube channels, uses Gemini to watch interview videos, and publishes LinkedIn posts with AI-generated graphics to your personal account.**
+**An n8n automation pipeline that monitors curated YouTube channels, uses Gemini to watch interview videos, and publishes posts with AI-generated graphics natively to LinkedIn, X, Facebook, Instagram, and jwd.nyc.**
 
-When newsworthy figures give YouTube interviews, this pipeline automatically extracts the most compelling quotes and insights, writes a high-engagement LinkedIn post, generates a custom graphic, and publishes — all without manual effort.
+When newsworthy figures give YouTube interviews, this pipeline automatically extracts the most compelling quotes and insights, writes a high-engagement post, generates a custom graphic, and publishes to all platforms — without manual effort.
 
 ---
 
@@ -18,12 +18,14 @@ When newsworthy figures give YouTube interviews, this pipeline automatically ext
    - Key insights (4 bullets)
    - Narrative summary
    - Most surprising/controversial statement
-6. **Gemini** writes a 150–200 word LinkedIn post — quote-first, punchy, opinionated (Scott Galloway style)
+6. **Gemini** writes a 150–200 word post — quote-first, punchy, opinionated (Scott Galloway style)
 7. **Gemini** generates a Nano Banana image prompt (Portrait + Quote Card or Conceptual Chalk Drawing)
 8. **Gemini image model** (`gemini-3.1-flash-image-preview`) generates the graphic
-9. Image is uploaded to WordPress (`pro-se.pro`) for public hosting
-10. Post + image published to personal LinkedIn via **GetLate**
-11. Video marked as processed in Postgres to prevent duplicates
+9. Image is uploaded to **jwd.nyc** WordPress media library for public hosting
+10. Blog post (full analysis + quotes + insights) published to **jwd.nyc**
+11. Post + image published natively to **LinkedIn**, **X**, **Facebook**, and **Instagram**
+12. Video marked as processed in Postgres to prevent duplicates
+13. Summary email sent via Gmail
 
 ---
 
@@ -36,8 +38,11 @@ When newsworthy figures give YouTube interviews, this pipeline automatically ext
 | Post writing | Google Gemini Pro (via n8n LangChain agent) |
 | Image prompt generation | Google Gemini Pro (via n8n LangChain agent) |
 | Image generation | Google Gemini `gemini-3.1-flash-image-preview` |
-| Image hosting | WordPress REST API (`pro-se.pro`) |
-| LinkedIn publishing | GetLate API |
+| Blog publishing | WordPress REST API (jwd.nyc) |
+| LinkedIn publishing | n8n LinkedIn node (native OAuth2) |
+| X publishing | n8n Twitter node v2 (native OAuth2) |
+| Facebook publishing | n8n Facebook Graph API node |
+| Instagram publishing | n8n Facebook Graph API node (two-step container → publish) |
 | Database | Neon Postgres (shared with AI Video Publisher) |
 
 ---
@@ -64,7 +69,11 @@ Both tables live in the existing **AI Video Publisher** Neon Postgres database.
 | `channel_id` | varchar(64) | Source channel ID |
 | `video_title` | text | Title of the video |
 | `video_url` | text | Full YouTube URL |
-| `getlate_post_id` | text | GetLate post ID (for reference) |
+| `linkedin_urn` | text | LinkedIn post ID |
+| `x_tweet_url` | text | X tweet URL |
+| `jwd_blog_url` | text | jwd.nyc post URL |
+| `facebook_post_id` | text | Facebook post ID |
+| `instagram_post_id` | text | Instagram media ID |
 | `processed_at` | timestamptz | When it was processed |
 
 ---
@@ -83,15 +92,13 @@ Copy `.env.example` to `.env` and fill in your values:
 
 ```env
 DATABASE_URL=postgres://...
-
 GEMINI_API_KEY=AIza...
-
-GETLATE_API_KEY=sk_...
-GETLATE_PERSONAL_PROFILE_ID=your-getlate-profile-id
-GETLATE_PERSONAL_LINKEDIN_ACCOUNT_ID=your-linkedin-account-id
+LINKEDIN_PERSON_URN=urn:li:person:XXXXXXXXXX
+FACEBOOK_PAGE_ID=your-facebook-page-id
+INSTAGRAM_USER_ID=your-instagram-user-id
 ```
 
-> The `.env` file is for running `setup-db.js` locally. The three GetLate/Gemini variables must also be set as **n8n environment variables** so the workflow can reference them via `$env.VARIABLE_NAME`.
+> The `.env` file is only needed to run `setup-db.js` locally. The `GEMINI_API_KEY`, `LINKEDIN_PERSON_URN`, `FACEBOOK_PAGE_ID`, and `INSTAGRAM_USER_ID` must also be set as **n8n environment variables** so the workflow can reference them via `$env.VARIABLE_NAME`.
 
 ### 3. Create database tables
 
@@ -119,13 +126,16 @@ To find a channel's ID: go to the channel page on YouTube, view source, and sear
 3. Select `workflow.json`
 4. Set the following **n8n environment variables** in Settings → Environment Variables:
    - `GEMINI_API_KEY`
-   - `GETLATE_API_KEY`
-   - `GETLATE_PERSONAL_PROFILE_ID`
-   - `GETLATE_PERSONAL_LINKEDIN_ACCOUNT_ID`
-5. Verify the existing credentials are connected:
+   - `LINKEDIN_PERSON_URN` — your LinkedIn person URN (format: `urn:li:person:XXXXXXXXXX`)
+   - `FACEBOOK_PAGE_ID` — your Facebook page ID
+   - `INSTAGRAM_USER_ID` — your Instagram business/creator account user ID
+5. Connect credentials in the workflow:
    - `Google Gemini(PaLM) Bluestone Blog` — Google PaLM API
    - `AI Video Publisher` — Postgres (Neon)
-   - `PSP Wordpress` — WordPress (pro-se.pro)
+   - `JWD Wordpress` — WordPress (jwd.nyc, with application password)
+   - `LinkedIn Personal` — LinkedIn OAuth2
+   - `X Personal` — Twitter OAuth2
+   - `Facebook Personal` — Facebook Graph API (needs pages_manage_posts + instagram_content_publish permissions)
 6. Activate the workflow
 
 ---
@@ -154,7 +164,7 @@ DELETE FROM processed_videos WHERE video_id = 'VIDEO_ID';
 
 ---
 
-## LinkedIn Post Style
+## Post Style
 
 Posts follow a consistent format optimized for engagement:
 
@@ -166,11 +176,16 @@ Posts follow a consistent format optimized for engagement:
 
 Tone is direct, opinionated, and authoritative — no "I watched this video" openers, no promotional language.
 
+The same post text and image appear on LinkedIn, X, Facebook, Instagram, and jwd.nyc.
+
 ---
 
 ## Notes
 
 - **Gemini video understanding** requires the YouTube video to have auto-generated or manual captions enabled. Videos without captions may return incomplete analysis.
-- **Image hosting** uses `pro-se.pro` WordPress media library as a CDN for GetLate. Images are uploaded but not attached to any WordPress post.
+- **Image hosting** uses jwd.nyc WordPress media library as a CDN. The image is uploaded to media but not attached to any WordPress post — the blog post is created separately with `featured_media`.
+- **Instagram** requires an Instagram Business or Creator account connected to a Facebook Page. Personal Instagram accounts cannot use the Graph API.
+- **Facebook** posts to a Page (not a personal profile). The `FACEBOOK_PAGE_ID` must be a page you manage.
+- **Platform failures are non-fatal** — each social node has `continueErrorOutput` enabled, so a failure on one platform does not stop the others. Check the notification email to see which platforms succeeded.
 - The pipeline processes at most one batch of new videos per hour per channel. High-volume channels will catch up over subsequent hours.
 - The `ON CONFLICT (video_id) DO NOTHING` clause in the insert query makes the pipeline safe to re-run without creating duplicates.

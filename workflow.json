@@ -121,7 +121,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [\n      {\n        \"fileData\": {\n          \"fileUri\": \"{{ $('Filter Recent Videos').item.json.video_url }}\"\n        }\n      },\n      {\n        \"text\": \"You are analyzing a YouTube interview for a LinkedIn content creator.\\n\\nWatch this video carefully and extract the following. Return ONLY a valid JSON object with these exact keys:\\n{\\n  \\\"speaker_name\\\": \\\"Full name of the main guest or interviewee\\\",\\n  \\\"speaker_title\\\": \\\"Their role, company, or professional description\\\",\\n  \\\"top_quotes\\\": [\\\"verbatim or near-verbatim quote 1\\\", \\\"quote 2\\\", \\\"quote 3\\\", \\\"quote 4\\\", \\\"quote 5\\\"],\\n  \\\"key_insights\\\": [\\\"insight 1\\\", \\\"insight 2\\\", \\\"insight 3\\\", \\\"insight 4\\\"],\\n  \\\"narrative_summary\\\": \\\"2-3 sentence arc of the full interview\\\",\\n  \\\"surprising_statement\\\": \\\"The single most unexpected or provocative thing said in the video\\\"\\n}\"\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 2048,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
+        "jsonBody": "={\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [\n      {\n        \"fileData\": {\n          \"fileUri\": \"{{ $('Filter Recent Videos').item.json.video_url }}\"\n        }\n      },\n      {\n        \"text\": \"You are analyzing a YouTube interview for a LinkedIn content creator.\\n\\nWatch this video carefully and extract the following. Return ONLY a valid JSON object:\\n{\\n  \\\"speaker_name\\\": \\\"Full name of the main guest or interviewee\\\",\\n  \\\"speaker_title\\\": \\\"Their role, company, or professional description\\\",\\n  \\\"top_quotes\\\": [\\\"verbatim quote 1\\\", \\\"quote 2\\\", \\\"quote 3\\\", \\\"quote 4\\\", \\\"quote 5\\\"],\\n  \\\"key_insights\\\": [\\\"insight 1\\\", \\\"insight 2\\\", \\\"insight 3\\\", \\\"insight 4\\\"],\\n  \\\"narrative_summary\\\": \\\"2-3 sentence arc of the full interview\\\",\\n  \\\"surprising_statement\\\": \\\"The single most unexpected or provocative thing said\\\"\\n}\"\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 2048,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -252,7 +252,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://pro-se.pro/wp-json/wp/v2/media",
+        "url": "https://jwd.nyc/wp-json/wp/v2/media",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "wordpressApi",
         "sendHeaders": true,
@@ -273,52 +273,217 @@
       "typeVersion": 4.3,
       "position": [200, 512],
       "id": "a0000001-0000-0000-0000-000000000010",
-      "name": "Upload Image to WP",
+      "name": "Upload Image to jwd.nyc",
       "credentials": {
         "wordpressApi": {
-          "id": "0hOd8VpdpqyrhnQl",
-          "name": "PSP Wordpress "
+          "id": "jwd-wordpress-cred",
+          "name": "JWD Wordpress"
         }
       }
     },
     {
       "parameters": {
+        "jsCode": "// Assemble blog post content for jwd.nyc from the Gemini analysis\nconst analysis = $('Parse Gemini Analysis').item.json;\nconst post = $('Write LinkedIn Post').item.json.output;\nconst video = $('Filter Recent Videos').item.json;\nconst wpImageId = $('Upload Image to jwd.nyc').item.json.id;\nconst imageUrl = $('Upload Image to jwd.nyc').item.json.guid?.raw || '';\n\n// Generate URL slug: speaker-name-video-id\nconst speakerSlug = analysis.speaker_name\n  .toLowerCase()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/^-|-$/g, '');\nconst slug = `${speakerSlug}-${video.video_id}`;\nconst jwd_blog_url = `https://jwd.nyc/${slug}/`;\n\n// Build HTML content\nconst quotesHtml = analysis.top_quotes\n  .map(q => `<blockquote><p>${q}</p></blockquote>`)\n  .join('\\n');\n\nconst insightsHtml = analysis.key_insights\n  .map(k => `<li>${k}</li>`)\n  .join('\\n');\n\nconst hashtagsText = post.hashtags.map(h => `#${h}`).join(' ');\n\nconst content = `<p>${analysis.narrative_summary}</p>\n\n<h2>Key Quotes from ${analysis.speaker_name}</h2>\n${quotesHtml}\n\n<h2>Key Takeaways</h2>\n<ul>\n${insightsHtml}\n</ul>\n\n<h2>Most Surprising Statement</h2>\n<blockquote><p>${analysis.surprising_statement}</p></blockquote>\n\n<h2>Watch the Full Interview</h2>\n<p><a href=\"${video.video_url}\" target=\"_blank\" rel=\"noopener\">Watch on YouTube →</a></p>\n\n<hr>\n\n<p>${post.post_text.replace(/\\n/g, '</p>\\n<p>')}</p>\n\n<p><em>${hashtagsText}</em></p>`;\n\n// X post: opening quote + attribution + URL (fits in 280 chars)\nconst firstLine = post.post_text.split('\\n')[0] || post.post_text.substring(0, 220);\nconst xPost = `${firstLine}\\n\\n${video.video_url}`;\n\nreturn [{\n  json: {\n    video_id: video.video_id,\n    video_url: video.video_url,\n    video_title: video.video_title,\n    channel_id: video.channel_id,\n    speaker_name: analysis.speaker_name,\n    slug,\n    jwd_blog_url,\n    wp_image_id: wpImageId,\n    image_url: imageUrl,\n    title: post.post_title,\n    content,\n    post_text: post.post_text,\n    x_post: xPost,\n    hashtags: post.hashtags\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 512],
+      "id": "a0000001-0000-0000-0000-000000000014",
+      "name": "Assemble Blog Content"
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "https://getlate.dev/api/v1/posts",
-        "sendHeaders": true,
-        "headerParameters": {
+        "url": "https://jwd.nyc/wp-json/wp/v2/posts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wordpressApi",
+        "sendBody": true,
+        "bodyParameters": {
           "parameters": [
             {
-              "name": "Content-Type",
-              "value": "application/json"
+              "name": "title",
+              "value": "={{ $json.title }}"
             },
             {
-              "name": "Authorization",
-              "value": "=Bearer {{ $env.GETLATE_API_KEY }}"
+              "name": "content",
+              "value": "={{ $json.content }}"
+            },
+            {
+              "name": "status",
+              "value": "publish"
+            },
+            {
+              "name": "slug",
+              "value": "={{ $json.slug }}"
+            },
+            {
+              "name": "featured_media",
+              "value": "={{ $json.wp_image_id }}"
             }
           ]
         },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"content\": \"{{ $('Write LinkedIn Post').item.json.output.post_text.replace(/[\\\\\\\"]/, function(m) { return m === '\\\"' ? '\\\\\\\"' : '\\\\\\\\'; }).replace(/\\n/g, '\\\\n').replace(/\\r/g, '\\\\r') }}\",\n  \"link\": \"{{ $('Filter Recent Videos').item.json.video_url }}\",\n  \"mediaItems\": [\n    {\n      \"url\": \"{{ $('Upload Image to WP').item.json.guid.raw.trim() }}\",\n      \"type\": \"image\"\n    }\n  ],\n  \"publishNow\": true,\n  \"title\": \"{{ $('Write LinkedIn Post').item.json.output.post_title.replace(/[\\\\\\\"]/, function(m) { return m === '\\\"' ? '\\\\\\\"' : '\\\\\\\\'; }) }}\",\n  \"queuedFromProfile\": \"{{ $env.GETLATE_PERSONAL_PROFILE_ID }}\",\n  \"platforms\": [\n    {\n      \"platform\": \"linkedin\",\n      \"accountId\": \"{{ $env.GETLATE_PERSONAL_LINKEDIN_ACCOUNT_ID }}\"\n    }\n  ]\n}"
+        "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [400, 512],
-      "id": "a0000001-0000-0000-0000-000000000011",
-      "name": "Post to GetLate (Personal LinkedIn)"
+      "position": [600, 512],
+      "id": "a0000001-0000-0000-0000-000000000015",
+      "name": "Publish to jwd.nyc",
+      "credentials": {
+        "wordpressApi": {
+          "id": "jwd-wordpress-cred",
+          "name": "JWD Wordpress"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "person": "={{ $env.LINKEDIN_PERSON_URN }}",
+        "text": "={{ $('Assemble Blog Content').item.json.post_text }}",
+        "shareMediaCategory": "ARTICLE",
+        "additionalFields": {
+          "title": "={{ $('Assemble Blog Content').item.json.title }}",
+          "originalUrl": "={{ $('Assemble Blog Content').item.json.jwd_blog_url }}",
+          "thumbnailUrl": "={{ $('Assemble Blog Content').item.json.image_url }}"
+        }
+      },
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [800, 512],
+      "id": "a0000001-0000-0000-0000-000000000018",
+      "name": "Post to LinkedIn",
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "JDGw5vxcjZMIsLFi",
+          "name": "LinkedIn Personal"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "text": "={{ $('Assemble Blog Content').item.json.x_post }}"
+      },
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [1000, 512],
+      "id": "a0000001-0000-0000-0000-000000000019",
+      "name": "Post to X",
+      "credentials": {
+        "twitterOAuth2Api": {
+          "id": "noWRcTuZK1uwib8F",
+          "name": "X Personal"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "node": "={{ $env.FACEBOOK_PAGE_ID }}",
+        "edge": "feed",
+        "method": "POST",
+        "options": {
+          "additionalFields": {
+            "body": [
+              {
+                "key": "message",
+                "value": "={{ $('Assemble Blog Content').item.json.post_text }}"
+              },
+              {
+                "key": "link",
+                "value": "={{ $('Assemble Blog Content').item.json.jwd_blog_url }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.facebookGraphApi",
+      "typeVersion": 1,
+      "position": [1200, 512],
+      "id": "a0000001-0000-0000-0000-00000000001a",
+      "name": "Post to Facebook",
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "whd1GgFSCNoPbj4b",
+          "name": "Facebook Personal"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "node": "={{ $env.INSTAGRAM_USER_ID }}",
+        "edge": "media",
+        "method": "POST",
+        "options": {
+          "additionalFields": {
+            "body": [
+              {
+                "key": "image_url",
+                "value": "={{ $('Assemble Blog Content').item.json.image_url }}"
+              },
+              {
+                "key": "caption",
+                "value": "={{ $('Assemble Blog Content').item.json.post_text }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.facebookGraphApi",
+      "typeVersion": 1,
+      "position": [1400, 512],
+      "id": "a0000001-0000-0000-0000-00000000001b",
+      "name": "Create Instagram Container",
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "whd1GgFSCNoPbj4b",
+          "name": "Facebook Personal"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "node": "={{ $env.INSTAGRAM_USER_ID }}",
+        "edge": "media_publish",
+        "method": "POST",
+        "options": {
+          "additionalFields": {
+            "body": [
+              {
+                "key": "creation_id",
+                "value": "={{ $json.id }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.facebookGraphApi",
+      "typeVersion": 1,
+      "position": [1600, 512],
+      "id": "a0000001-0000-0000-0000-00000000001c",
+      "name": "Publish to Instagram",
+      "credentials": {
+        "facebookGraphApi": {
+          "id": "whd1GgFSCNoPbj4b",
+          "name": "Facebook Personal"
+        }
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO processed_videos (video_id, channel_id, video_title, video_url, getlate_post_id)\nVALUES ($1, $2, $3, $4, $5)\nON CONFLICT (video_id) DO NOTHING\nRETURNING *",
+        "query": "INSERT INTO processed_videos (\n  video_id, channel_id, video_title, video_url,\n  linkedin_urn, x_tweet_url, jwd_blog_url, facebook_post_id, instagram_post_id\n)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\nON CONFLICT (video_id) DO NOTHING\nRETURNING *",
         "options": {
-          "queryReplacement": "={{ [\n  $('Filter Recent Videos').item.json.video_id,\n  $('Filter Recent Videos').item.json.channel_id,\n  $('Filter Recent Videos').item.json.video_title,\n  $('Filter Recent Videos').item.json.video_url,\n  $json.post?.id || null\n] }}"
+          "queryReplacement": "={{ [\n  $('Filter Recent Videos').item.json.video_id,\n  $('Filter Recent Videos').item.json.channel_id,\n  $('Filter Recent Videos').item.json.video_title,\n  $('Filter Recent Videos').item.json.video_url,\n  $('Post to LinkedIn').item.json?.id || null,\n  $('Post to X').item.json?.data?.id ? 'https://x.com/i/web/status/' + $('Post to X').item.json.data.id : null,\n  $('Assemble Blog Content').item.json.jwd_blog_url,\n  $('Post to Facebook').item.json?.id || null,\n  $('Publish to Instagram').item.json?.id || null\n] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
-      "position": [600, 512],
+      "position": [400, 768],
       "id": "a0000001-0000-0000-0000-000000000012",
       "name": "Insert Processed Video",
       "credentials": {
@@ -329,10 +494,32 @@
       }
     },
     {
+      "parameters": {
+        "sendTo": "jeromekjerome@gmail.com",
+        "subject": "=New Interview Post: {{ $('Assemble Blog Content').item.json.speaker_name }}",
+        "emailType": "text",
+        "message": "=YouTube: {{ $('Filter Recent Videos').item.json.video_url }}\n\njwd.nyc: {{ $('Assemble Blog Content').item.json.jwd_blog_url }}\n\nLinkedIn: {{ $('Post to LinkedIn').item.json?.id || 'error' }}\n\nX: {{ $('Post to X').item.json?.data?.id ? 'https://x.com/i/web/status/' + $('Post to X').item.json.data.id : 'error' }}\n\nFacebook: {{ $('Post to Facebook').item.json?.id || 'error' }}\n\nInstagram: {{ $('Publish to Instagram').item.json?.id || 'error' }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [600, 768],
+      "id": "a0000001-0000-0000-0000-000000000017",
+      "name": "Send Notification",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "3oVaq2GQraz8VDnA",
+          "name": "JWD Gmail"
+        }
+      }
+    },
+    {
       "parameters": {},
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [800, 512],
+      "position": [800, 768],
       "id": "a0000001-0000-0000-0000-000000000013",
       "name": "Done"
     }
@@ -391,20 +578,60 @@
     },
     "Generate Image": {
       "main": [
-        [{ "node": "Upload Image to WP", "type": "main", "index": 0 }]
+        [{ "node": "Upload Image to jwd.nyc", "type": "main", "index": 0 }]
       ]
     },
-    "Upload Image to WP": {
+    "Upload Image to jwd.nyc": {
       "main": [
-        [{ "node": "Post to GetLate (Personal LinkedIn)", "type": "main", "index": 0 }]
+        [{ "node": "Assemble Blog Content", "type": "main", "index": 0 }]
       ]
     },
-    "Post to GetLate (Personal LinkedIn)": {
+    "Assemble Blog Content": {
+      "main": [
+        [{ "node": "Publish to jwd.nyc", "type": "main", "index": 0 }]
+      ]
+    },
+    "Publish to jwd.nyc": {
+      "main": [
+        [{ "node": "Post to LinkedIn", "type": "main", "index": 0 }],
+        [{ "node": "Post to LinkedIn", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to LinkedIn": {
+      "main": [
+        [{ "node": "Post to X", "type": "main", "index": 0 }],
+        [{ "node": "Post to X", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to X": {
+      "main": [
+        [{ "node": "Post to Facebook", "type": "main", "index": 0 }],
+        [{ "node": "Post to Facebook", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to Facebook": {
+      "main": [
+        [{ "node": "Create Instagram Container", "type": "main", "index": 0 }],
+        [{ "node": "Create Instagram Container", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Instagram Container": {
+      "main": [
+        [{ "node": "Publish to Instagram", "type": "main", "index": 0 }],
+        [{ "node": "Insert Processed Video", "type": "main", "index": 0 }]
+      ]
+    },
+    "Publish to Instagram": {
       "main": [
         [{ "node": "Insert Processed Video", "type": "main", "index": 0 }]
       ]
     },
     "Insert Processed Video": {
+      "main": [
+        [{ "node": "Send Notification", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Notification": {
       "main": [
         [{ "node": "Done", "type": "main", "index": 0 }]
       ]
