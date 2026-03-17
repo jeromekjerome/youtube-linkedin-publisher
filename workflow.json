@@ -108,8 +108,18 @@
     },
     {
       "parameters": {
+        "jsCode": "// Fetch YouTube transcript via InnerTube API (Android client)\nconst videoUrl = $json.video_url;\nconst videoId = videoUrl.split('v=')[1]?.split('&')[0];\nif (!videoId) throw new Error('Invalid YouTube URL: ' + videoUrl);\n\nconst playerRes = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)'\n  },\n  body: JSON.stringify({\n    context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38' } },\n    videoId\n  })\n});\nconst playerData = await playerRes.json();\nconst tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;\nif (!tracks?.length) throw new Error('No caption tracks for video: ' + videoId);\n\nconst track = tracks.find(t => t.languageCode === 'en') || tracks[0];\nconst captionRes = await fetch(track.baseUrl, {\n  headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36' }\n});\nconst captionXml = await captionRes.text();\n\nconst transcript = [...captionXml.matchAll(/<s[^>]*>([^<]*)<\\/s>/g)]\n  .map(m => m[1])\n  .join('')\n  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, \"'\").replace(/&quot;/g, '\"')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nif (!transcript) throw new Error('Empty transcript for video: ' + videoId);\n\nreturn [{\n  json: {\n    ...$json,\n    transcript\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 256],
+      "id": "a0000001-0000-0000-0000-000000000020",
+      "name": "Fetch Transcript"
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -121,11 +131,11 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [\n      {\n        \"fileData\": {\n          \"fileUri\": \"{{ $('Filter Recent Videos').item.json.video_url }}\"\n        }\n      },\n      {\n        \"text\": \"You are analyzing a YouTube interview for a LinkedIn content creator.\\n\\nWatch this video carefully and extract the following. Return ONLY a valid JSON object:\\n{\\n  \\\"speaker_name\\\": \\\"Full name of the main guest or interviewee\\\",\\n  \\\"speaker_title\\\": \\\"Their role, company, or professional description\\\",\\n  \\\"top_quotes\\\": [\\\"verbatim quote 1\\\", \\\"quote 2\\\", \\\"quote 3\\\", \\\"quote 4\\\", \\\"quote 5\\\"],\\n  \\\"key_insights\\\": [\\\"insight 1\\\", \\\"insight 2\\\", \\\"insight 3\\\", \\\"insight 4\\\"],\\n  \\\"narrative_summary\\\": \\\"2-3 sentence arc of the full interview\\\",\\n  \\\"surprising_statement\\\": \\\"The single most unexpected or provocative thing said\\\"\\n}\"\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 2048,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
+        "jsonBody": "={\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [{\n      \"text\": \"You are analyzing a YouTube interview transcript for a LinkedIn content creator.\\n\\nRead this transcript carefully and extract the following. Return ONLY a valid JSON object:\\n{\\n  \\\"speaker_name\\\": \\\"Full name of the main guest or interviewee\\\",\\n  \\\"speaker_title\\\": \\\"Their role, company, or professional description\\\",\\n  \\\"top_quotes\\\": [\\\"verbatim quote 1\\\", \\\"quote 2\\\", \\\"quote 3\\\", \\\"quote 4\\\", \\\"quote 5\\\"],\\n  \\\"key_insights\\\": [\\\"insight 1\\\", \\\"insight 2\\\", \\\"insight 3\\\", \\\"insight 4\\\"],\\n  \\\"narrative_summary\\\": \\\"2-3 sentence arc of the full interview\\\",\\n  \\\"surprising_statement\\\": \\\"The single most unexpected or provocative thing said\\\"\\n}\\n\\nTRANSCRIPT:\\n{{ $json.transcript }}\"\n    }]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 2048,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [0, 256],
+      "position": [200, 256],
       "id": "a0000001-0000-0000-0000-000000000007",
       "name": "Analyze Video with Gemini"
     },
@@ -552,8 +562,13 @@
     },
     "New Video?": {
       "main": [
-        [{ "node": "Analyze Video with Gemini", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Transcript", "type": "main", "index": 0 }],
         []
+      ]
+    },
+    "Fetch Transcript": {
+      "main": [
+        [{ "node": "Analyze Video with Gemini", "type": "main", "index": 0 }]
       ]
     },
     "Analyze Video with Gemini": {

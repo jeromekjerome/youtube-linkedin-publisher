@@ -32,22 +32,60 @@ function parseJSON(text) {
     }
 }
 
-// ─── Step 1: Analyze video ───────────────────────────────────────────────────
-async function analyzeVideo(videoUrl) {
-    console.log(`\n🎬 Step 1: Analyzing video with Gemini 1.5 Pro...`);
-    console.log(`   URL: ${videoUrl}\n`);
+// ─── Step 0: Fetch transcript ─────────────────────────────────────────────────
+async function fetchTranscript(videoUrl) {
+    console.log(`\n📝 Step 0: Fetching YouTube transcript...`);
 
-    const response = await callGemini('gemini-1.5-pro', {
+    const videoId = videoUrl.split('v=')[1]?.split('&')[0];
+    if (!videoId) throw new Error('Invalid YouTube URL');
+
+    // InnerTube API (Android client) — reliable, no session tokens needed
+    const playerRes = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)'
+        },
+        body: JSON.stringify({
+            context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38' } },
+            videoId
+        })
+    });
+    const playerData = await playerRes.json();
+    const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!tracks?.length) throw new Error('No caption tracks available — captions may be disabled on this video');
+
+    const track = tracks.find(t => t.languageCode === 'en') || tracks[0];
+    const captionRes = await fetch(track.baseUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36' }
+    });
+    const captionXml = await captionRes.text();
+
+    const transcript = [...captionXml.matchAll(/<s[^>]*>([^<]*)<\/s>/g)]
+        .map(m => m[1])
+        .join('')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!transcript) throw new Error('Empty transcript');
+
+    const wordCount = transcript.split(' ').length;
+    console.log(`   ✓ ${wordCount.toLocaleString()} words (~${Math.round(wordCount * 1.3).toLocaleString()} tokens)`);
+    return transcript;
+}
+
+// ─── Step 1: Analyze transcript ───────────────────────────────────────────────
+async function analyzeVideo(transcript) {
+    console.log(`\n🎬 Step 1: Analyzing transcript with Gemini...`);
+
+    const response = await callGemini('gemini-2.5-flash', {
         contents: [{
             role: 'user',
-            parts: [
-                {
-                    fileData: { fileUri: videoUrl }
-                },
-                {
-                    text: `You are analyzing a YouTube interview for a LinkedIn content creator.
+            parts: [{
+                text: `You are analyzing a YouTube interview transcript for a LinkedIn content creator.
 
-Watch this video carefully and extract the following. Return ONLY a valid JSON object:
+Read this transcript carefully and extract the following. Return ONLY a valid JSON object:
 {
   "speaker_name": "Full name of the main guest or interviewee",
   "speaker_title": "Their role, company, or professional description",
@@ -55,19 +93,21 @@ Watch this video carefully and extract the following. Return ONLY a valid JSON o
   "key_insights": ["insight 1", "insight 2", "insight 3", "insight 4"],
   "narrative_summary": "2-3 sentence arc of the full interview",
   "surprising_statement": "The single most unexpected or provocative thing said"
-}`
-                }
-            ]
+}
+
+TRANSCRIPT:
+${transcript}`
+            }]
         }],
         generationConfig: {
             temperature: 0.3,
-            maxOutputTokens: 2048,
+            maxOutputTokens: 8192,
             responseMimeType: 'application/json'
         }
     });
 
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('No response from Gemini video analysis');
+    if (!text) throw new Error('No response from Gemini analysis');
     return parseJSON(text);
 }
 
@@ -106,11 +146,11 @@ ${analysis.surprising_statement}
 
 Return ONLY valid JSON with keys: post_text, post_title, hashtags (array).`;
 
-    const response = await callGemini('gemini-pro', {
+    const response = await callGemini('gemini-2.5-flash', {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 1024,
+            maxOutputTokens: 8192,
             responseMimeType: 'application/json'
         }
     });
@@ -140,7 +180,7 @@ Draft a Nano Banana image generation prompt (under 400 words).
 
 Return ONLY valid JSON with keys: nano_banana_prompt (string), key_elements_html (HTML ul string).`;
 
-    const response = await callGemini('gemini-pro', {
+    const response = await callGemini('gemini-2.5-flash', {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: {
             temperature: 0.7,
@@ -161,7 +201,9 @@ async function main() {
     console.log('═══════════════════════════════════════════════════');
 
     try {
-        const analysis = await analyzeVideo(VIDEO_URL);
+        const transcript = await fetchTranscript(VIDEO_URL);
+
+        const analysis = await analyzeVideo(transcript);
         console.log('\n📋 Analysis:');
         console.log(`   Speaker:  ${analysis.speaker_name}, ${analysis.speaker_title}`);
         console.log(`   Summary:  ${analysis.narrative_summary}`);
