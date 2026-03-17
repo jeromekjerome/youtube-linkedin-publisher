@@ -1,0 +1,437 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "triggerAtMinute": 45
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "a0000001-0000-0000-0000-000000000001",
+      "name": "Hourly Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, channel_id, channel_name FROM youtube_channels WHERE is_active = true ORDER BY id",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [200, 0],
+      "id": "a0000001-0000-0000-0000-000000000002",
+      "name": "Get Active Channels",
+      "credentials": {
+        "postgres": {
+          "id": "PeSW5dvcLscA2dF6",
+          "name": "AI Video Publisher"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://www.youtube.com/feeds/videos.xml?channel_id={{ $json.channel_id }}"
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [400, 0],
+      "id": "a0000001-0000-0000-0000-000000000003",
+      "name": "Fetch Channel RSS"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter videos published in the last 24h and extract video IDs\nconst cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);\nconst channelId = $('Get Active Channels').item.json.channel_id;\nconst channelName = $('Get Active Channels').item.json.channel_name;\n\nconst results = [];\nfor (const item of $input.all()) {\n  const pub = new Date(item.json.isoDate || item.json.pubDate || 0);\n  if (pub > cutoff) {\n    const url = item.json.link || '';\n    const videoId = url.split('v=')[1]?.split('&')[0] || '';\n    if (videoId) {\n      results.push({\n        json: {\n          video_id: videoId,\n          video_url: url,\n          video_title: item.json.title || '',\n          channel_id: channelId,\n          channel_name: channelName,\n          pub_date: item.json.isoDate || item.json.pubDate || new Date().toISOString()\n        }\n      });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0],
+      "id": "a0000001-0000-0000-0000-000000000004",
+      "name": "Filter Recent Videos"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT video_id FROM processed_videos WHERE video_id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.video_id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [800, 0],
+      "id": "a0000001-0000-0000-0000-000000000005",
+      "name": "Check if Processed",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "PeSW5dvcLscA2dF6",
+          "name": "AI Video Publisher"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-not-processed",
+              "leftValue": "={{ $json.video_id }}",
+              "operator": {
+                "type": "string",
+                "operation": "notExists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1000, 0],
+      "id": "a0000001-0000-0000-0000-000000000006",
+      "name": "New Video?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [\n      {\n        \"fileData\": {\n          \"fileUri\": \"{{ $('Filter Recent Videos').item.json.video_url }}\"\n        }\n      },\n      {\n        \"text\": \"You are analyzing a YouTube interview for a LinkedIn content creator.\\n\\nWatch this video carefully and extract the following. Return ONLY a valid JSON object with these exact keys:\\n{\\n  \\\"speaker_name\\\": \\\"Full name of the main guest or interviewee\\\",\\n  \\\"speaker_title\\\": \\\"Their role, company, or professional description\\\",\\n  \\\"top_quotes\\\": [\\\"verbatim or near-verbatim quote 1\\\", \\\"quote 2\\\", \\\"quote 3\\\", \\\"quote 4\\\", \\\"quote 5\\\"],\\n  \\\"key_insights\\\": [\\\"insight 1\\\", \\\"insight 2\\\", \\\"insight 3\\\", \\\"insight 4\\\"],\\n  \\\"narrative_summary\\\": \\\"2-3 sentence arc of the full interview\\\",\\n  \\\"surprising_statement\\\": \\\"The single most unexpected or provocative thing said in the video\\\"\\n}\"\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 2048,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, 256],
+      "id": "a0000001-0000-0000-0000-000000000007",
+      "name": "Analyze Video with Gemini"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json;\nconst text = response.candidates?.[0]?.content?.parts?.[0]?.text;\n\nif (!text) {\n  const videoId = $('Filter Recent Videos').item.json.video_id;\n  throw new Error(`No Gemini response for video: ${videoId}`);\n}\n\nlet analysis;\ntry {\n  analysis = JSON.parse(text);\n} catch (e) {\n  const cleaned = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  analysis = JSON.parse(cleaned);\n}\n\nconst video = $('Filter Recent Videos').item.json;\n\nreturn [{\n  json: {\n    video_id: video.video_id,\n    video_url: video.video_url,\n    video_title: video.video_title,\n    channel_id: video.channel_id,\n    channel_name: video.channel_name,\n    pub_date: video.pub_date,\n    speaker_name: analysis.speaker_name || 'Unknown Speaker',\n    speaker_title: analysis.speaker_title || '',\n    top_quotes: analysis.top_quotes || [],\n    key_insights: analysis.key_insights || [],\n    narrative_summary: analysis.narrative_summary || '',\n    surprising_statement: analysis.surprising_statement || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 256],
+      "id": "a0000001-0000-0000-0000-000000000008",
+      "name": "Parse Gemini Analysis"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are writing a high-engagement LinkedIn post for a content creator who reposts key insights from YouTube interviews.\n\n## VIDEO DATA\nChannel: {{ $json.channel_name }}\nVideo Title: {{ $json.video_title }}\nSpeaker: {{ $json.speaker_name }}{{ $json.speaker_title ? ', ' + $json.speaker_title : '' }}\n\nTop Quotes:\n{{ $json.top_quotes.map((q, i) => `${i+1}. \"${q}\"`).join('\\n') }}\n\nKey Insights:\n{{ $json.key_insights.map((k, i) => `${i+1}. ${k}`).join('\\n') }}\n\nNarrative Summary:\n{{ $json.narrative_summary }}\n\nMost Surprising Statement:\n{{ $json.surprising_statement }}\n\n## POST REQUIREMENTS\n- 150-200 words total\n- Open with the most compelling quote in full quotation marks\n- Immediately attribute it: \"— {{ $json.speaker_name }}\"\n- Follow with 2-3 punchy insight bullets\n- Close with one provocative question to drive comments\n- End with 3-5 relevant hashtags on a new line\n- Tone: Direct, opinionated, authoritative (think Scott Galloway)\n- NO \"I watched this video\" or \"Check this out\" openers\n- NO promotional language\n- Plain text only — no HTML tags\n\nReturn ONLY valid JSON.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a JSON-only API that writes viral LinkedIn posts. Return only valid JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [400, 256],
+      "id": "a0000001-0000-0000-0000-000000000009",
+      "name": "Write LinkedIn Post"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-pro-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [384, 400],
+      "id": "a0000001-0000-0000-0000-00000000000a",
+      "name": "Gemini (Post Writer)",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "iEkQgj5QMurXzTlA",
+          "name": "Google Gemini(PaLM) Bluestone Blog"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"post_text\": {\n      \"type\": \"string\",\n      \"description\": \"The full LinkedIn post in plain text, 150-200 words\"\n    },\n    \"post_title\": {\n      \"type\": \"string\",\n      \"description\": \"A short compelling title for the post, under 60 characters\"\n    },\n    \"hashtags\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"3-5 hashtags without the # symbol\"\n    }\n  },\n  \"required\": [\"post_text\", \"post_title\", \"hashtags\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [544, 400],
+      "id": "a0000001-0000-0000-0000-00000000000b",
+      "name": "Post Schema"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## Role\nYou are an AI Prompting Specialist generating a featured image for a LinkedIn post about a YouTube interview.\n\n## Input\n**Speaker:** {{ $json.output.post_title }}\n**Post Preview:** {{ $json.output.post_text.substring(0, 300) }}\n\n## Visual Style\nChoose the best fit:\n- **Portrait + Quote Card:** Clean, modern design with a bold quote overlaid on an abstract gradient or geometric background. Best for provocative personal statements.\n- **Conceptual Chalk Drawing:** Dramatic blackboard-style illustration of the central idea. Best for data, predictions, or systemic concepts.\n\n## Instructions\nDraft a Nano Banana image generation prompt (under 400 words). Use:\n- Chalk style keywords: \"Textured chalk on blackboard\", \"vibrant pastel colors\", \"dramatic spotlight\", \"dusty texture\"\n- Quote card keywords: \"Vector graphic\", \"flat design\", \"clean bold typography\", \"deep navy and gold\"\n- Include the aspect ratio in parentheses at the end: (Aspect Ratio: 1:1)\n\nReturn ONLY valid JSON.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a JSON-only API that generates image prompts. Return only valid JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [640, 256],
+      "id": "a0000001-0000-0000-0000-00000000000c",
+      "name": "Generate Image Prompt"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-pro-latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [624, 400],
+      "id": "a0000001-0000-0000-0000-00000000000d",
+      "name": "Gemini (Image Prompter)",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "iEkQgj5QMurXzTlA",
+          "name": "Google Gemini(PaLM) Bluestone Blog"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"nano_banana_prompt\": {\n      \"type\": \"string\",\n      \"description\": \"The raw plain-text image generation prompt for Nano Banana. Under 400 words. Include aspect ratio in parentheses at the end.\"\n    },\n    \"key_elements_html\": {\n      \"type\": \"string\",\n      \"description\": \"HTML ul list of the key visual elements and their symbolic meaning.\"\n    }\n  },\n  \"required\": [\"nano_banana_prompt\", \"key_elements_html\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [784, 400],
+      "id": "a0000001-0000-0000-0000-00000000000e",
+      "name": "Image Prompt Schema"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-image-preview",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.1-flash-image-preview"
+        },
+        "prompt": "={{ $json.output.nano_banana_prompt }}\n\n{{ $json.output.key_elements_html }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [0, 512],
+      "id": "a0000001-0000-0000-0000-00000000000f",
+      "name": "Generate Image",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "iEkQgj5QMurXzTlA",
+          "name": "Google Gemini(PaLM) Bluestone Blog"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://pro-se.pro/wp-json/wp/v2/media",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wordpressApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Disposition",
+              "value": "attachment; filename=image.png"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [200, 512],
+      "id": "a0000001-0000-0000-0000-000000000010",
+      "name": "Upload Image to WP",
+      "credentials": {
+        "wordpressApi": {
+          "id": "0hOd8VpdpqyrhnQl",
+          "name": "PSP Wordpress "
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://getlate.dev/api/v1/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GETLATE_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"content\": \"{{ $('Write LinkedIn Post').item.json.output.post_text.replace(/[\\\\\\\"]/, function(m) { return m === '\\\"' ? '\\\\\\\"' : '\\\\\\\\'; }).replace(/\\n/g, '\\\\n').replace(/\\r/g, '\\\\r') }}\",\n  \"link\": \"{{ $('Filter Recent Videos').item.json.video_url }}\",\n  \"mediaItems\": [\n    {\n      \"url\": \"{{ $('Upload Image to WP').item.json.guid.raw.trim() }}\",\n      \"type\": \"image\"\n    }\n  ],\n  \"publishNow\": true,\n  \"title\": \"{{ $('Write LinkedIn Post').item.json.output.post_title.replace(/[\\\\\\\"]/, function(m) { return m === '\\\"' ? '\\\\\\\"' : '\\\\\\\\'; }) }}\",\n  \"queuedFromProfile\": \"{{ $env.GETLATE_PERSONAL_PROFILE_ID }}\",\n  \"platforms\": [\n    {\n      \"platform\": \"linkedin\",\n      \"accountId\": \"{{ $env.GETLATE_PERSONAL_LINKEDIN_ACCOUNT_ID }}\"\n    }\n  ]\n}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [400, 512],
+      "id": "a0000001-0000-0000-0000-000000000011",
+      "name": "Post to GetLate (Personal LinkedIn)"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO processed_videos (video_id, channel_id, video_title, video_url, getlate_post_id)\nVALUES ($1, $2, $3, $4, $5)\nON CONFLICT (video_id) DO NOTHING\nRETURNING *",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Filter Recent Videos').item.json.video_id,\n  $('Filter Recent Videos').item.json.channel_id,\n  $('Filter Recent Videos').item.json.video_title,\n  $('Filter Recent Videos').item.json.video_url,\n  $json.post?.id || null\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [600, 512],
+      "id": "a0000001-0000-0000-0000-000000000012",
+      "name": "Insert Processed Video",
+      "credentials": {
+        "postgres": {
+          "id": "PeSW5dvcLscA2dF6",
+          "name": "AI Video Publisher"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [800, 512],
+      "id": "a0000001-0000-0000-0000-000000000013",
+      "name": "Done"
+    }
+  ],
+  "connections": {
+    "Hourly Trigger": {
+      "main": [
+        [{ "node": "Get Active Channels", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Active Channels": {
+      "main": [
+        [{ "node": "Fetch Channel RSS", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Channel RSS": {
+      "main": [
+        [{ "node": "Filter Recent Videos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Filter Recent Videos": {
+      "main": [
+        [{ "node": "Check if Processed", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check if Processed": {
+      "main": [
+        [{ "node": "New Video?", "type": "main", "index": 0 }]
+      ]
+    },
+    "New Video?": {
+      "main": [
+        [{ "node": "Analyze Video with Gemini", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Analyze Video with Gemini": {
+      "main": [
+        [{ "node": "Parse Gemini Analysis", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Gemini Analysis": {
+      "main": [
+        [{ "node": "Write LinkedIn Post", "type": "main", "index": 0 }]
+      ]
+    },
+    "Write LinkedIn Post": {
+      "main": [
+        [{ "node": "Generate Image Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Image Prompt": {
+      "main": [
+        [{ "node": "Generate Image", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Image": {
+      "main": [
+        [{ "node": "Upload Image to WP", "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload Image to WP": {
+      "main": [
+        [{ "node": "Post to GetLate (Personal LinkedIn)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post to GetLate (Personal LinkedIn)": {
+      "main": [
+        [{ "node": "Insert Processed Video", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Processed Video": {
+      "main": [
+        [{ "node": "Done", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gemini (Post Writer)": {
+      "ai_languageModel": [
+        [{ "node": "Write LinkedIn Post", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Post Schema": {
+      "ai_outputParser": [
+        [{ "node": "Write LinkedIn Post", "type": "ai_outputParser", "index": 0 }]
+      ]
+    },
+    "Gemini (Image Prompter)": {
+      "ai_languageModel": [
+        [{ "node": "Generate Image Prompt", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "Image Prompt Schema": {
+      "ai_outputParser": [
+        [{ "node": "Generate Image Prompt", "type": "ai_outputParser", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "8530e9f654e2e9c8e5a0b9dc5c0b38ddfebe33bf6d11c0791f9da2009d007149"
+  }
+}

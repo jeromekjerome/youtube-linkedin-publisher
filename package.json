@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "scripts": {
+    "setup": "node setup-db.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "dotenv": "^17.3.1"
+  }
+}
